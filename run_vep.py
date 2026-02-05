@@ -200,6 +200,8 @@ def run_calibration():
 
     # Final drain
     eeg, aux, timestamp = drain_queue_into(eeg, aux, timestamp)
+    # Filter continuous EEG before save (same process as original: filter then use for trials)
+    eeg = mne.filter.filter_data(eeg, sfreq=sampling_rate, l_freq=8, h_freq=30, verbose=False)
     np.save(save_file_eeg, eeg)
     # Save events as list of dicts (numpy will store as object array)
     np.save(save_file_events, np.array(events, dtype=object))
