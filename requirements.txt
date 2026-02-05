@@ -1,2 +1,6 @@
 psychopy>=2022.1.4
 brainflow>=5.1.2
+mne>=1.0
+numpy
+scipy
+scikit-learn>=1.0
