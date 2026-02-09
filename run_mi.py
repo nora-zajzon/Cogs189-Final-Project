@@ -1,9 +1,3 @@
-"""
-EEG BCI Maze Navigation – data acquisition and real-time inference.
-Motor imagery: Class 0 = left hand, Class 1 = right foot.
-- Training mode (calibration_mode=True): display cue, record epochs with event markers.
-- Real-time mode: sliding-window classification, prediction smoothing; no maze yet.
-"""
 from psychopy import visual, core
 from psychopy.hardware import keyboard
 import numpy as np
@@ -15,15 +9,15 @@ import time
 import mne
 
 # --- Params ---
-sampling_rate = 250
 cyton_in = True
+lsl_out = False
 width = 1536
 height = 864
 subject = 1
 session = 1
-calibration_mode = True  # True = collect labeled data; False = real-time prediction
+calibration_mode = False  # True = collect labeled data; False = real-time prediction
 n_per_class = 30  # trials per class (left hand, right foot)
-run = 1
+run = 1  # Run number, it is used as the random seed for the trial sequence generation
 # Motor imagery trial timing (s)
 baseline_duration = 1.5
 record_duration = 3.0
@@ -32,14 +26,17 @@ realtime_window_sec = 1.5
 realtime_update_interval_sec = 0.25
 smoothing_n_predictions = 5
 # Paths
-save_dir = f"data/motor_imagery_2class/sub-{subject:02d}/ses-{session:02d}/"
+save_dir = f'data/motor_imagery_2class/sub-{subject:02d}/ses-{session:02d}/'  # Directory to save data to
+save_file_eeg = save_dir + f'eeg_{n_per_class}-per-class_run-{run}.npy'
+save_file_aux = save_dir + f'aux_{n_per_class}-per-class_run-{run}.npy'
+save_file_timestamp = save_dir + f'timestamp_{n_per_class}-per-class_run-{run}.npy'
+save_file_metadata = save_dir + f'metadata_{n_per_class}-per-class_run-{run}.npy'
+save_file_eeg_trials = save_dir + f'eeg-trials_{n_per_class}-per-class_run-{run}.npy'
+save_file_aux_trials = save_dir + f'aux-trials_{n_per_class}-per-class_run-{run}.npy'
+save_file_events = save_dir + f'events_{n_per_class}-per-class_run-{run}.npy'
 model_save_dir = "cache"
 model_name = "motor_lda_model.pkl"
 csp_name = "motor_csp.pkl"
-
-os.makedirs(save_dir, exist_ok=True)
-save_file_eeg = os.path.join(save_dir, f"eeg_run-{run}.npy")
-save_file_events = os.path.join(save_dir, f"events_run-{run}.npy")
 model_file_path = os.path.join(model_save_dir, model_name)
 csp_file_path = os.path.join(model_save_dir, csp_name)
 
@@ -58,98 +55,101 @@ window = visual.Window(
 )
 
 # --- EEG acquisition (BrainFlow / Cyton) ---
-board = None
-stop_event = None
-queue_in = None
-
-
-def find_openbci_port():
-    import glob
-    from serial import Serial
-    BAUD_RATE = 115200
-    if sys.platform.startswith("win"):
-        ports = ["COM%s" % (i + 1) for i in range(256)]
-    elif sys.platform.startswith("linux") or sys.platform.startswith("cygwin"):
-        ports = glob.glob("/dev/ttyUSB*")
-    elif sys.platform.startswith("darwin"):
-        ports = glob.glob("/dev/cu.usbserial*")
-    else:
-        raise EnvironmentError("Unsupported OS for port detection")
-    for port in ports:
-        try:
-            s = Serial(port=port, baudrate=BAUD_RATE, timeout=None)
-            s.write(b"v")
-            time.sleep(2)
-            line = ""
-            if s.in_waiting:
-                while "$$$" not in line:
-                    c = s.read().decode("utf-8", errors="replace")
-                    line += c
-                if "OpenBCI" in line:
-                    s.close()
-                    return port
-            s.close()
-        except Exception:
-            pass
-    raise OSError("Cannot find OpenBCI port.")
-
-
-def start_board():
-    global board, stop_event, queue_in
+if cyton_in:
+    import glob, sys, time, serial
     from brainflow.board_shim import BoardShim, BrainFlowInputParams
+    from serial import Serial
     from threading import Thread, Event
     from queue import Queue
-
-    CYTON_BOARD_ID = 0
-    ANALOGUE_MODE = "/2"
+    sampling_rate = 250
+    CYTON_BOARD_ID = 0  # 0 if no daisy 2 if use daisy board, 6 if using daisy+wifi shield
+    BAUD_RATE = 115200
+    ANALOGUE_MODE = '/2'  # Reads from analog pins A5(D11), A6(D12) and if no 
+                          # wifi shield is present, then A7(D13) as well.
+    def find_openbci_port():
+        """Finds the port to which the Cyton Dongle is connected to."""
+        # Find serial port names per OS
+        if sys.platform.startswith('win'):
+            ports = ['COM%s' % (i + 1) for i in range(256)]
+        elif sys.platform.startswith('linux') or sys.platform.startswith('cygwin'):
+            ports = glob.glob('/dev/ttyUSB*')
+        elif sys.platform.startswith('darwin'):
+            ports = glob.glob('/dev/cu.usbserial*')
+        else:
+            raise EnvironmentError('Error finding ports on your operating system')
+        openbci_port = ''
+        for port in ports:
+            try:
+                s = Serial(port=port, baudrate=BAUD_RATE, timeout=None)
+                s.write(b'v')
+                line = ''
+                time.sleep(2)
+                if s.inWaiting():
+                    line = ''
+                    c = ''
+                    while '$$$' not in line:
+                        c = s.read().decode('utf-8', errors='replace')
+                        line += c
+                    if 'OpenBCI' in line:
+                        openbci_port = port
+                s.close()
+            except (OSError, serial.SerialException):
+                pass
+        if openbci_port == '':
+            raise OSError('Cannot find OpenBCI port.')
+            exit()
+        else:
+            return openbci_port
+        
     print(BoardShim.get_board_descr(CYTON_BOARD_ID))
     params = BrainFlowInputParams()
-    params.serial_port = find_openbci_port()
+    if CYTON_BOARD_ID != 6:
+        params.serial_port = find_openbci_port()
+    elif CYTON_BOARD_ID == 6:
+        params.ip_port = 9000
     board = BoardShim(CYTON_BOARD_ID, params)
     board.prepare_session()
-    board.config_board("/0")
-    board.config_board("//")
-    board.config_board(ANALOGUE_MODE)
+    res_query = board.config_board('/0')
+    print(res_query)
+    res_query = board.config_board('//')
+    print(res_query)
+    res_query = board.config_board(ANALOGUE_MODE)
+    print(res_query)
     board.start_stream(45000)
     stop_event = Event()
-    queue_in = Queue()
-
-    def get_data(q):
+    
+    def get_data(queue_in, lsl_out=False):
         while not stop_event.is_set():
             data_in = board.get_board_data()
-            ts = data_in[board.get_timestamp_channel(CYTON_BOARD_ID)]
+            timestamp_in = data_in[board.get_timestamp_channel(CYTON_BOARD_ID)]
             eeg_in = data_in[board.get_eeg_channels(CYTON_BOARD_ID)]
             aux_in = data_in[board.get_analog_channels(CYTON_BOARD_ID)]
-            if len(ts) > 0:
-                q.put((eeg_in, aux_in, ts))
+            if len(timestamp_in) > 0:
+                print('queue-in: ', eeg_in.shape, aux_in.shape, timestamp_in.shape)
+                queue_in.put((eeg_in, aux_in, timestamp_in))
             time.sleep(0.1)
+    
+    queue_in = Queue()
+    cyton_thread = Thread(target=get_data, args=(queue_in, lsl_out))
+    cyton_thread.daemon = True
+    cyton_thread.start()
 
-    t = Thread(target=get_data, args=(queue_in,))
-    t.daemon = True
-    t.start()
-    return board
-
-
-def stop_board():
-    global board, stop_event
-    if stop_event is not None:
-        stop_event.set()
-    if board is not None:
-        try:
-            board.stop_stream()
-            board.release_session()
-        except Exception:
-            pass
-
-
-def drain_queue_into(eeg, aux, timestamp):
-    """Append all available chunks from queue; return (eeg, aux, timestamp)."""
-    while not queue_in.empty():
-        eeg_in, aux_in, ts_in = queue_in.get()
-        eeg = np.hstack((eeg, eeg_in)) if eeg.size else eeg_in
-        aux = np.hstack((aux, aux_in)) if aux.size else aux_in
-        timestamp = np.concatenate((timestamp, ts_in)) if timestamp.size else ts_in
-    return eeg, aux, timestamp
+    if os.path.exists(model_file_path):
+        with open(model_file_path, 'rb') as f:
+            model = pickle.load(f)
+    else:
+        model = None
+    if os.path.exists(csp_file_path):
+        with open(csp_file_path, 'rb') as f:
+            csp = pickle.load(f)
+    else:
+        csp = None
+else:
+    board = None
+    stop_event = None
+    queue_in = None
+    model = None
+    csp = None
 
 
 # --- Trial sequence: 2 classes, n_per_class each ---
@@ -166,6 +166,8 @@ def run_calibration():
     eeg = np.zeros((8, 0))
     aux = np.zeros((3, 0))
     timestamp = np.zeros((0))
+    eeg_trials = []
+    aux_trials = []
     events = []  # list of {"sample": int, "label": 0|1}
 
     instruction_stim = visual.TextStim(
@@ -176,8 +178,13 @@ def run_calibration():
     )
 
     for i_trial, label in enumerate(trial_sequence):
-        # Flush queue so we know current buffer size when we show cue
-        eeg, aux, timestamp = drain_queue_into(eeg, aux, timestamp)
+        # Collect all data from the queue
+        while not queue_in.empty():
+            eeg_in, aux_in, timestamp_in = queue_in.get()
+            print('data-in: ', eeg_in.shape, aux_in.shape, timestamp_in.shape)
+            eeg = np.concatenate((eeg, eeg_in), axis=1)
+            aux = np.concatenate((aux, aux_in), axis=1)
+            timestamp = np.concatenate((timestamp, timestamp_in), axis=0)
 
         instruction_stim.text = INSTRUCTION_TEXT[label]
         trial_stim.text = f"Trial {i_trial + 1} / {len(trial_sequence)}"
@@ -191,20 +198,63 @@ def run_calibration():
         core.wait(baseline_duration)
         core.wait(record_duration)
 
-        # Drain again so next trial has up-to-date buffer
-        eeg, aux, timestamp = drain_queue_into(eeg, aux, timestamp)
+        # Collect data again after trial
+        while not queue_in.empty():
+            eeg_in, aux_in, timestamp_in = queue_in.get()
+            print('data-in: ', eeg_in.shape, aux_in.shape, timestamp_in.shape)
+            eeg = np.concatenate((eeg, eeg_in), axis=1)
+            aux = np.concatenate((aux, aux_in), axis=1)
+            timestamp = np.concatenate((timestamp, timestamp_in), axis=0)
+
+        # Extract trial data
+        print('total: ', eeg.shape, aux.shape, timestamp.shape)
+        baseline_duration_samples = int(baseline_duration * sampling_rate)
+        trial_duration_samples = int(record_duration * sampling_rate)
+        trial_start = max(0, cue_sample - baseline_duration_samples)
+        trial_end_required = trial_start + baseline_duration_samples + trial_duration_samples
+        if trial_end_required > eeg.shape[1]:
+            print(f'Warning: Not enough data for trial {i_trial}, skipping trial extraction')
+            continue
+        filtered_eeg = mne.filter.filter_data(eeg, sfreq=sampling_rate, l_freq=8, h_freq=30, verbose=False)
+        trial_eeg = np.copy(filtered_eeg[:, trial_start:trial_end_required])
+        trial_aux = np.copy(aux[:, trial_start:trial_end_required])
+        print(f'trial {i_trial}: ', trial_eeg.shape, trial_aux.shape)
+        baseline_average = np.mean(trial_eeg[:, :baseline_duration_samples], axis=1, keepdims=True)
+        trial_eeg -= baseline_average
+        eeg_trials.append(trial_eeg)
+        aux_trials.append(trial_aux)
 
         keys = keyboard.getKeys()
         if "escape" in keys:
-            break
+            if cyton_in:
+                os.makedirs(save_dir, exist_ok=True)
+                np.save(save_file_eeg, eeg)
+                np.save(save_file_aux, aux)
+                np.save(save_file_eeg_trials, eeg_trials)
+                np.save(save_file_aux_trials, aux_trials)
+                np.save(save_file_events, np.array(events, dtype=object))
+                stop_event.set()
+                board.stop_stream()
+                board.release_session()
+            core.quit()
 
-    # Final drain
-    eeg, aux, timestamp = drain_queue_into(eeg, aux, timestamp)
-    # Filter continuous EEG before save (same process as original: filter then use for trials)
-    eeg = mne.filter.filter_data(eeg, sfreq=sampling_rate, l_freq=8, h_freq=30, verbose=False)
-    np.save(save_file_eeg, eeg)
-    # Save events as list of dicts (numpy will store as object array)
-    np.save(save_file_events, np.array(events, dtype=object))
+    # Final collection
+    while not queue_in.empty():
+        eeg_in, aux_in, timestamp_in = queue_in.get()
+        print('data-in: ', eeg_in.shape, aux_in.shape, timestamp_in.shape)
+        eeg = np.concatenate((eeg, eeg_in), axis=1)
+        aux = np.concatenate((aux, aux_in), axis=1)
+        timestamp = np.concatenate((timestamp, timestamp_in), axis=0)
+
+    if cyton_in:
+        os.makedirs(save_dir, exist_ok=True)
+        np.save(save_file_eeg, eeg)
+        np.save(save_file_aux, aux)
+        np.save(save_file_eeg_trials, eeg_trials)
+        np.save(save_file_aux_trials, aux_trials)
+        np.save(save_file_events, np.array(events, dtype=object))
+        board.stop_stream()
+        board.release_session()
     print(f"Saved eeg shape {eeg.shape}, {len(events)} events to {save_dir}")
 
 
@@ -219,20 +269,8 @@ def _preprocess_chunk(chunk, sfreq):
     return x
 
 
-def load_realtime_pipeline():
-    """Load CSP and LDA from disk; return (csp, model) or (None, None)."""
-    if not os.path.exists(model_file_path) or not os.path.exists(csp_file_path):
-        return None, None
-    with open(csp_file_path, "rb") as f:
-        csp = pickle.load(f)
-    with open(model_file_path, "rb") as f:
-        model = pickle.load(f)
-    return csp, model
-
-
 def run_realtime():
-    csp, model = load_realtime_pipeline()
-    if model is None:
+    if model is None or csp is None:
         print("No model found. Run training first (scripts/train_motor.py).")
         return
 
@@ -251,9 +289,12 @@ def run_realtime():
     )
 
     while True:
-        eeg_buffer, _, _ = drain_queue_into(eeg_buffer, np.zeros((3, 0)), np.zeros((0)))
-        if eeg_buffer.shape[1] > 2 * window_samples:
-            eeg_buffer = eeg_buffer[:, -2 * window_samples:]
+        # Collect data from queue
+        while not queue_in.empty():
+            eeg_in, aux_in, timestamp_in = queue_in.get()
+            eeg_buffer = np.concatenate((eeg_buffer, eeg_in), axis=1)
+            if eeg_buffer.shape[1] > 2 * window_samples:
+                eeg_buffer = eeg_buffer[:, -2 * window_samples:]
 
         now = core.getTime()
         if now - last_update_time >= realtime_update_interval_sec and eeg_buffer.shape[1] >= window_samples:
@@ -278,19 +319,16 @@ def run_realtime():
 
         keys = keyboard.getKeys()
         if "escape" in keys:
-            break
+            stop_event.set()
+            board.stop_stream()
+            board.release_session()
+            core.quit()
 
 
 # --- Main ---
 if __name__ == "__main__":
-    if cyton_in:
-        start_board()
-    try:
-        if calibration_mode:
-            run_calibration()
-        else:
-            run_realtime()
-    finally:
-        if cyton_in:
-            stop_board()
+    if calibration_mode:
+        run_calibration()
+    else:
+        run_realtime()
     window.close()
