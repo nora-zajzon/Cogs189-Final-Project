@@ -1,4 +1,4 @@
-from psychopy import visual, core
+from psychopy import visual, core, event
 from psychopy.hardware import keyboard
 import numpy as np
 import random
@@ -9,7 +9,8 @@ import time
 import mne
 
 # --- Params ---
-cyton_in = True
+cyton_in = False # eeg input (set to false for fake data)
+# sampling_rate = 250  # for debugging
 lsl_out = False
 width = 1536
 height = 864
@@ -19,8 +20,8 @@ data_gathered = False  # False = collect labeled data; True = play snake game wi
 n_per_class = 30  # trials per class (left hand, right foot)
 run = 1  # Run number, it is used as the random seed for the trial sequence generation
 # Motor imagery trial timing (s)
-baseline_duration = 1.5
-record_duration = 3.0
+baseline_duration = 1.0 # seconds of baseline before recording; change to 2.0 for motor imagery recording
+record_duration = 2.0 # seconds of motor imagery recording per trial; change to 3.0 for motor imagery recording
 # Real-time
 realtime_window_sec = 1.5
 realtime_update_interval_sec = 0.25
@@ -45,7 +46,7 @@ CLASS_LEFT_HAND = 0
 CLASS_RIGHT_FOOT = 1
 INSTRUCTION_TEXT = {CLASS_LEFT_HAND: "Move LEFT HAND", CLASS_RIGHT_FOOT: "Move RIGHT FOOT"}
 
-keyboard = keyboard.Keyboard()
+kb = keyboard.Keyboard()
 window = visual.Window(
     size=[width, height],
     checkTiming=True,
@@ -150,6 +151,28 @@ else:
     queue_in = None
     model = None
     csp = None
+# else: # fake data for debugging (uncomment to use for debugging and comment out the above)
+#     board = None
+#     stop_event = None
+#     model = None
+#     csp = None
+
+#     from queue import Queue
+#     queue_in = Queue()
+
+#     # simulate fake EEG data in background
+#     import threading
+#     def fake_eeg_stream():
+#         sampling_rate = 250
+#         while True:
+#             eeg = np.random.randn(8, sampling_rate // 10) * 5
+#             aux = np.random.randn(3, sampling_rate // 10)
+#             timestamp = np.arange(eeg.shape[1])
+#             queue_in.put((eeg, aux, timestamp))
+#             time.sleep(0.1)
+
+#     threading.Thread(target=fake_eeg_stream, daemon=True).start()
+
 
 
 # --- Trial sequence: 2 classes, n_per_class each ---
@@ -256,7 +279,7 @@ def run_calibration():
         eeg_trials.append(trial_eeg)
         aux_trials.append(trial_aux)
 
-        keys = keyboard.getKeys()
+        keys = kb.getKeys()
         if "escape" in keys:
             if cyton_in:
                 os.makedirs(save_dir, exist_ok=True)
@@ -497,7 +520,7 @@ def run_snake_game():
         window.flip()
 
         # Escape to quit
-        keys = keyboard.getKeys()
+        keys = kb.getKeys()
         if 'escape' in keys:
             break
 
@@ -509,7 +532,7 @@ def run_snake_game():
     over_txt.draw()
     window.flip()
     while True:
-        keys = keyboard.getKeys()
+        keys = kb.getKeys()
         if 'escape' in keys:
             break
         core.wait(0.05)
@@ -520,6 +543,43 @@ def run_snake_game():
         board.release_session()
 
 
+
+# --- Test Snake game using keyboard instead of EEG ---
+# def run_snake_game_keyboard():
+
+#     game = SnakeGame(window)
+
+#     info_txt = visual.TextStim(
+#         window,
+#         text="Keyboard Test Mode\n← = LEFT   → = RIGHT\nESC = quit",
+#         pos=(0, -(game.grid_n * game.cell_px / 2 + 60)),
+#         color='white',
+#         units='pix',
+#         height=20,
+#     )
+
+#     while game.alive:
+
+#         keys = event.getKeys()
+
+#         if 'left' in keys:
+#             game.set_direction(SnakeGame.LEFT)
+
+#         if 'right' in keys:
+#             game.set_direction(SnakeGame.RIGHT)
+
+#         if 'escape' in keys:
+#             return
+
+#         game.tick()
+#         game.draw()
+#         info_txt.draw()
+#         window.flip()
+
+#         core.wait(0.01)
+
+
+
 # --- Main ---
 if __name__ == "__main__":
     if data_gathered:
@@ -527,3 +587,4 @@ if __name__ == "__main__":
     else:
         run_calibration()
     window.close()
+    # run_snake_game_keyboard()
