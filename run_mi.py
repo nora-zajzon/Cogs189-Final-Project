@@ -341,6 +341,7 @@ class SnakeGame:
     _TURN_LEFT = None   # initialized in __init__
     _TURN_RIGHT = None
 
+    # CHANGE MOVE INTERVAL TO CHANGE SPEED: 0.35 - slower, 0.15 - faster
     def __init__(self, psychopy_window, grid_n=20, cell_px=30, move_interval=0.35):
         self.win = psychopy_window
         self.grid_n = grid_n
@@ -360,7 +361,7 @@ class SnakeGame:
         self._cell = visual.Rect(self.win, width=cell_px - 2, height=cell_px - 2, units='pix')
         self._border = visual.Rect(
             self.win, width=grid_n * cell_px + 4, height=grid_n * cell_px + 4,
-            units='pix', fillColor='#1a1a2e', lineColor='#444444',
+            units='pix', fillColor="#183B49", lineColor='#183B49',
         )
         self.score_txt = visual.TextStim(
             self.win, text='Score: 0',
@@ -434,8 +435,8 @@ class SnakeGame:
         # Food
         self._cell.pos = (ox + self.food[0] * self.cell_px + self.cell_px / 2,
                           oy + self.food[1] * self.cell_px + self.cell_px / 2)
-        self._cell.fillColor = '#FF5555'
-        self._cell.lineColor = '#FF5555'
+        self._cell.fillColor = '#F5F0E6'
+        self._cell.lineColor = '#F5F0E6'
         self._cell.draw()
 
         # Snake (tail first so head is on top)
@@ -443,7 +444,7 @@ class SnakeGame:
             seg = self.snake[i]
             self._cell.pos = (ox + seg[0] * self.cell_px + self.cell_px / 2,
                               oy + seg[1] * self.cell_px + self.cell_px / 2)
-            self._cell.fillColor = '#4CAF50' if i == 0 else '#A9EE49'
+            self._cell.fillColor = '#C69214' if i == 0 else '#FFCD00'
             self._cell.lineColor = self._cell.fillColor
             self._cell.draw()
 
@@ -545,46 +546,46 @@ def run_snake_game():
 
 
 # --- Test Snake game using keyboard instead of EEG ---
-# def run_snake_game_keyboard():
+def run_snake_game_keyboard():
 
-#     game = SnakeGame(window)
+    game = SnakeGame(window)
 
-#     info_txt = visual.TextStim(
-#         window,
-#         text="Keyboard Test Mode\n← = LEFT   → = RIGHT\nESC = quit",
-#         pos=(0, -(game.grid_n * game.cell_px / 2 + 60)),
-#         color='white',
-#         units='pix',
-#         height=20,
-#     )
+    info_txt = visual.TextStim(
+        window,
+        text="Keyboard Test Mode\n← = LEFT   → = RIGHT\nESC = quit",
+        pos=(0, -(game.grid_n * game.cell_px / 2 + 60)),
+        color='white',
+        units='pix',
+        height=20,
+    )
 
-#     while game.alive:
+    while game.alive:
 
-#         keys = event.getKeys()
+        keys = event.getKeys()
 
-#         if 'left' in keys:
-#             game.set_direction(SnakeGame.LEFT)
+        if 'left' in keys:
+            game.set_direction(SnakeGame.LEFT)
 
-#         if 'right' in keys:
-#             game.set_direction(SnakeGame.RIGHT)
+        if 'right' in keys:
+            game.set_direction(SnakeGame.RIGHT)
 
-#         if 'escape' in keys:
-#             return
+        if 'escape' in keys:
+            return
 
-#         game.tick()
-#         game.draw()
-#         info_txt.draw()
-#         window.flip()
+        game.tick()
+        game.draw()
+        info_txt.draw()
+        window.flip()
 
-#         core.wait(0.01)
+        core.wait(0.01)
 
 
 
 # --- Main ---
 if __name__ == "__main__":
-    if data_gathered:
-        run_snake_game()
-    else:
-        run_calibration()
-    window.close()
-    # run_snake_game_keyboard()
+    # if data_gathered:
+    #     run_snake_game()
+    # else:
+    #     run_calibration()
+    # window.close()
+    run_snake_game_keyboard()
