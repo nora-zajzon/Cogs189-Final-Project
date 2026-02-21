@@ -20,8 +20,8 @@ data_gathered = False  # False = collect labeled data; True = play snake game wi
 n_per_class = 30  # trials per class (left hand, right foot)
 run = 1  # Run number, it is used as the random seed for the trial sequence generation
 # Motor imagery trial timing (s)
-baseline_duration = 1.0 # seconds of baseline before recording; change to 2.0 for motor imagery recording
-record_duration = 2.0 # seconds of motor imagery recording per trial; change to 3.0 for motor imagery recording
+baseline_duration = 0.5 # seconds of baseline before recording
+record_duration = 1.5 # seconds of motor imagery recording per trial
 # Real-time
 realtime_window_sec = 1.5
 realtime_update_interval_sec = 0.25
@@ -240,9 +240,8 @@ def run_calibration():
             aux = np.concatenate((aux, aux_in), axis=1)
             timestamp = np.concatenate((timestamp, timestamp_in), axis=0)
 
-        # Event: cue onset at current sample index
+        # Cue onset sample index (event appended only after successful extraction)
         cue_sample = eeg.shape[1]
-        events.append({"sample": int(cue_sample), "label": int(label)})
 
         # Recording phase
         instruction_stim.text = INSTRUCTION_TEXT[label]
@@ -278,6 +277,7 @@ def run_calibration():
         trial_eeg -= baseline_average
         eeg_trials.append(trial_eeg)
         aux_trials.append(trial_aux)
+        events.append({"sample": int(cue_sample), "label": int(label)})
 
         keys = kb.getKeys()
         if "escape" in keys:
@@ -308,6 +308,7 @@ def run_calibration():
         np.save(save_file_eeg_trials, eeg_trials)
         np.save(save_file_aux_trials, aux_trials)
         np.save(save_file_events, np.array(events, dtype=object))
+        stop_event.set()
         board.stop_stream()
         board.release_session()
     print(f"Saved eeg shape {eeg.shape}, {len(events)} events to {save_dir}")
@@ -462,6 +463,14 @@ def run_snake_game():
     prediction == 0 (left hand) -> snake.set_direction(LEFT)
     prediction == 1 (right foot) -> snake.set_direction(RIGHT)
     """
+    global model, csp
+    # Try loading model if not already loaded (e.g. cyton_in=False at startup)
+    if model is None and os.path.exists(model_file_path):
+        with open(model_file_path, 'rb') as f:
+            model = pickle.load(f)
+    if csp is None and os.path.exists(csp_file_path):
+        with open(csp_file_path, 'rb') as f:
+            csp = pickle.load(f)
     if model is None or csp is None:
         print("No model found. Run training first (scripts/train_motor.py).")
         return
@@ -583,12 +592,11 @@ def run_snake_game_keyboard():
 
 # --- Main ---
 if __name__ == "__main__":
-    # if data_gathered:
-    #     run_snake_game()
-    # else:
-    #     run_calibration()
-    # window.close()
-    run_snake_game_keyboard()
+    if data_gathered:
+        run_snake_game()
+    else:
+        run_calibration()
+    window.close()
 
 
 # Saved eeg shape (8, 91986), 60 events to data/motor_imagery_2class/sub-01/ses-01/
