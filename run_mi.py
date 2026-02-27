@@ -9,7 +9,7 @@ import time
 import mne
 
 # --- Params ---
-cyton_in = False # eeg input (set to false for fake data)
+cyton_in = True # eeg input (set to false for fake data)
 # sampling_rate = 250  # for debugging
 lsl_out = False
 width = 1536
@@ -17,7 +17,7 @@ height = 864
 subject = 1
 session = 1
 data_gathered = False  # False = collect labeled data; True = play snake game with BCI
-n_per_class = 30  # trials per class (left hand, right foot)
+n_per_class = 1 # trials per class (left hand, right foot)
 run = 1  # Run number, it is used as the random seed for the trial sequence generation
 # Motor imagery trial timing (s)
 baseline_duration = 0.5 # seconds of baseline before recording
@@ -44,7 +44,13 @@ csp_file_path = os.path.join(model_save_dir, csp_name)
 # Class labels and labels for display
 CLASS_LEFT_HAND = 0
 CLASS_RIGHT_FOOT = 1
-INSTRUCTION_TEXT = {CLASS_LEFT_HAND: "Move LEFT HAND", CLASS_RIGHT_FOOT: "Move RIGHT FOOT"}
+CLASS_REST = 2
+
+INSTRUCTION_TEXT = {
+    CLASS_LEFT_HAND: "Move LEFT HAND",
+    CLASS_RIGHT_FOOT: "Move RIGHT FOOT",
+    CLASS_REST: "REST"
+}
 
 kb = keyboard.Keyboard()
 window = visual.Window(
@@ -65,8 +71,7 @@ if cyton_in:
     sampling_rate = 250
     CYTON_BOARD_ID = 0  # 0 if no daisy 2 if use daisy board, 6 if using daisy+wifi shield
     BAUD_RATE = 115200
-    ANALOGUE_MODE = '/2'  # Reads from analog pins A5(D11), A6(D12) and if no 
-                          # wifi shield is present, then A7(D13) as well.
+
     def find_openbci_port():
         """Finds the port to which the Cyton Dongle is connected to."""
         # Find serial port names per OS
@@ -101,7 +106,7 @@ if cyton_in:
             exit()
         else:
             return openbci_port
-        
+
     print(BoardShim.get_board_descr(CYTON_BOARD_ID))
     params = BrainFlowInputParams()
     if CYTON_BOARD_ID != 6:
@@ -110,15 +115,24 @@ if cyton_in:
         params.ip_port = 9000
     board = BoardShim(CYTON_BOARD_ID, params)
     board.prepare_session()
+
+    # Reset to default settings (EEG mode)
+    board.config_board("d")
+    time.sleep(1)
+
+    # IMPORTANT: removed ANALOGUE_MODE to avoid switching out of EEG mode
     res_query = board.config_board('/0')
     print(res_query)
     res_query = board.config_board('//')
     print(res_query)
-    res_query = board.config_board(ANALOGUE_MODE)
-    print(res_query)
+
     board.start_stream(45000)
+    time.sleep(2)
+
+    print("EEG channel indices:", board.get_eeg_channels(CYTON_BOARD_ID))
+    print("Full board data shape sample:", board.get_board_data().shape)
     stop_event = Event()
-    
+
     def get_data(queue_in, lsl_out=False):
         while not stop_event.is_set():
             data_in = board.get_board_data()
@@ -126,10 +140,11 @@ if cyton_in:
             eeg_in = data_in[board.get_eeg_channels(CYTON_BOARD_ID)]
             aux_in = data_in[board.get_analog_channels(CYTON_BOARD_ID)]
             if len(timestamp_in) > 0:
+                print("Incoming EEG variance:", np.var(eeg_in))
                 print('queue-in: ', eeg_in.shape, aux_in.shape, timestamp_in.shape)
                 queue_in.put((eeg_in, aux_in, timestamp_in))
             time.sleep(0.1)
-    
+
     queue_in = Queue()
     cyton_thread = Thread(target=get_data, args=(queue_in, lsl_out))
     cyton_thread.daemon = True
@@ -151,39 +166,19 @@ else:
     queue_in = None
     model = None
     csp = None
-# else: # fake data for debugging (uncomment to use for debugging and comment out the above)
-#     board = None
-#     stop_event = None
-#     model = None
-#     csp = None
 
-#     from queue import Queue
-#     queue_in = Queue()
-
-#     # simulate fake EEG data in background
-#     import threading
-#     def fake_eeg_stream():
-#         sampling_rate = 250
-#         while True:
-#             eeg = np.random.randn(8, sampling_rate // 10) * 5
-#             aux = np.random.randn(3, sampling_rate // 10)
-#             timestamp = np.arange(eeg.shape[1])
-#             queue_in.put((eeg, aux, timestamp))
-#             time.sleep(0.1)
-
-#     threading.Thread(target=fake_eeg_stream, daemon=True).start()
-
-
-
-# --- Trial sequence: 2 classes, n_per_class each ---
+# --- Trial sequence: 3 classes, n_per_class each ---
 def build_trial_sequence(n_per_class, seed=0):
-    seq = [CLASS_LEFT_HAND] * n_per_class + [CLASS_RIGHT_FOOT] * n_per_class
+    seq = (
+        [CLASS_LEFT_HAND] * n_per_class +
+        [CLASS_RIGHT_FOOT] * n_per_class +
+        [CLASS_REST] * n_per_class
+    )
     random.seed(seed)
     random.shuffle(seq)
     return seq
 
-
-# --- Training mode: collect labeled data with event markers ---
+# --- Training mode: collect labeled data with event markers ---.
 def run_calibration():
     trial_sequence = build_trial_sequence(n_per_class, seed=run)
     eeg = np.zeros((8, 0))
@@ -269,8 +264,17 @@ def run_calibration():
         if trial_end_required > eeg.shape[1]:
             print(f'Warning: Not enough data for trial {i_trial}, skipping trial extraction')
             continue
-        filtered_eeg = mne.filter.filter_data(eeg, sfreq=sampling_rate, l_freq=8, h_freq=30, verbose=False)
-        trial_eeg = np.copy(filtered_eeg[:, trial_start:trial_end_required])
+        trial_raw = np.copy(eeg[:, trial_start:trial_end_required])
+        print("Trial raw min/max:", np.min(trial_raw), np.max(trial_raw))
+        print("Trial raw variance:", np.var(trial_raw))
+
+        trial_eeg = mne.filter.filter_data(
+            trial_raw,
+            sfreq=sampling_rate,
+            l_freq=8,
+            h_freq=30,
+            verbose=False
+        )
         trial_aux = np.copy(aux[:, trial_start:trial_end_required])
         print(f'trial {i_trial}: ', trial_eeg.shape, trial_aux.shape)
         baseline_average = np.mean(trial_eeg[:, :baseline_duration_samples], axis=1, keepdims=True)
@@ -490,7 +494,12 @@ def run_snake_game():
         color='gray', units='pix', height=18,
     )
 
+    last_triggered_class = None
+    refractory_sec = 1.0
+    last_trigger_time = 0
+
     while game.alive:
+
         # Drain EEG queue
         while not queue_in.empty():
             eeg_in, _, _ = queue_in.get()
@@ -500,34 +509,53 @@ def run_snake_game():
 
         now = core.getTime()
 
-        # BCI classification
+        # ---- BCI classification ----
         if now - last_pred_t >= realtime_update_interval_sec and eeg_buf.shape[1] >= win_samp:
+
             last_pred_t = now
             chunk = eeg_buf[:, -win_samp:]
             ep = _preprocess_chunk(chunk, sampling_rate)[np.newaxis, ...]
+
             try:
                 feat = csp.transform(ep)
                 pred = model.predict(feat)[0]
+
+                # smoothing
                 pred_hist.append(pred)
                 if len(pred_hist) > smoothing_n_predictions:
                     pred_hist.pop(0)
+
                 smooth = int(np.round(np.mean(pred_hist)))
-                if smooth == CLASS_LEFT_HAND:
-                    game.set_direction(SnakeGame.LEFT)
-                    pred_txt.text = "BCI: LEFT HAND -> LEFT"
-                else:
-                    game.set_direction(SnakeGame.RIGHT)
-                    pred_txt.text = "BCI: RIGHT FOOT -> RIGHT"
+
+                # ---- ONE-SHOT TRIGGER LOGIC ----
+                if (
+                    now - last_trigger_time > refractory_sec
+                ):
+                    last_triggered_class = smooth
+                    last_trigger_time = now
+
+                    if smooth == CLASS_LEFT_HAND:
+                        game.set_direction(SnakeGame.LEFT)
+                        pred_txt.text = "BCI: LEFT HAND → LEFT"
+                    else:
+                        game.set_direction(SnakeGame.RIGHT)
+                        pred_txt.text = "BCI: RIGHT FOOT → RIGHT"
+
             except Exception as e:
                 pred_txt.text = f"BCI: err ({e})"
 
-        # Update game state
+        # ---- Update game ----
         game.tick()
 
-        # Draw
+        # ---- Draw ----
         game.draw()
         pred_txt.draw()
         window.flip()
+
+        # ---- Escape to quit ----
+        keys = kb.getKeys()
+        if 'escape' in keys:
+            break
 
         # Escape to quit
         keys = kb.getKeys()
@@ -597,54 +625,3 @@ if __name__ == "__main__":
     else:
         run_calibration()
     window.close()
-
-
-# Saved eeg shape (8, 91986), 60 events to data/motor_imagery_2class/sub-01/ses-01/
- # Exception in thread Thread-3 (get_data):
- # Traceback (most recent call last):
- # File "C:\Users\tfei\AppData\Local\Programs\Python\Python310\lib\threading.py", line 1009, in _bootstrap_inner
- # self.run()
- # File "C:\Users\tfei\AppData\Local\Programs\Python\Python310\lib\threading.py", line 946, in run
- # self._target(*self._args, **self._kwargs)
- # File "C:\Users\tfei\Downloads\Cogs189-Final-Project\run_mi.py", line 124, in get_data
- # data_in = board.get_board_data()
- # File "C:\Users\tfei\pyenv\lib\site-packages\brainflow\board_shim.py", line 1369, in get_board_data
- # data_size = self.get_board_data_count(preset)
- # File "C:\Users\tfei\pyenv\lib\site-packages\brainflow\board_shim.py", line 1318, in get_board_data_count
- # raise BrainFlowError('unable to obtain buffer size', res)
- # brainflow.exit_codes.BrainFlowError: BOARD_NOT_CREATED_ERROR:15 unable to obtain buffer size
- # 2.5790 WARNING Monitor specification not found. Creating a temporary one...
- # 385.7855 WARNING Stopping key buffers but this could be dangerous ifother keyboards rely on the same.
- # Exception ignored in: <function BoardShim.__del__ at 0x000002C78231E8C0>
- # Traceback (most recent call last):
- # File "C:\Users\tfei\pyenv\lib\site-packages\brainflow\board_shim.py", line 586, in __del__
- # File "C:\Users\tfei\pyenv\lib\site-packages\brainflow\board_shim.py", line 1353, in is_prepared
- # ctypes.ArgumentError: argument 1: <class 'ImportError'>: sys.meta_path is None, Python is likely shutting down
- 
- # (pyenv) PS C:\Users\tfei\Downloads\Cogs189-Final-Project> python run_mi.py
- # {'accel_channels': [9, 10, 11], 'analog_channels': [19, 20, 21], 'ecg_channels': [1, 2, 3, 4, 5, 6, 7, 8], 'eeg_channels': [1, 2, 3, 4, 5, 6, 7, 8], 'eeg_names': 'Fp1,Fp2,C3,C4,P7,P8,O1,O2', 'emg_channels': [1, 2, 3, 4, 5, 6, 7, 8], 'eog_channels': [1, 2, 3, 4, 5, 6, 7, 8], 'marker_channel': 23, 'name': 'Cyton', 'num_rows': 24, 'other_channels': [12, 13, 14, 15, 16, 17, 18], 'package_num_channel': 0, 'sampling_rate': 250, 'timestamp_channel': 22}
- # [2026-02-20 15:31:26.495] [board_logger] [info] incoming json: {
- # "file": "",
- # "file_anc": "",
- # "file_aux": "",
- # "ip_address": "",
- # "ip_address_anc": "",
- # "ip_address_aux": "",
- # "ip_port": 0,
- # "ip_port_anc": 0,
- # "ip_port_aux": 0,
- # "ip_protocol": 0,
- # "mac_address": "",
- # "master_board": -100,
- # "other_info": "",
- # "serial_number": "",
- # "serial_port": "COM4",
- # "timeout": 0
- # }
- # [2026-02-20 15:31:26.495] [board_logger] [info] opening port \\.\COM4
- # Success: default$$$
- # Success: default$$$
- # Success: analog$$$
- # No model found. Run training first (scripts/train_motor.py).
- # 2.2348 WARNING Monitor specification not found. Creating a temporary one...
- # 16.8512 WARNING Stopping key buffers but this could be dangerous ifother keyboards rely on the same.
