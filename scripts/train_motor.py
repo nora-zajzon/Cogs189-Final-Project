@@ -10,7 +10,7 @@ from mne.decoding import CSP
 
 parser = argparse.ArgumentParser(description='Train motor imagery (CSP+LDA) model')
 
-folder_path = 'data/motor_imagery_2class/sub-01/ses-01/'
+folder_path = '../data/motor_imagery_2class/sub-01/ses-01/'
 model_save_dir = 'cache/'
 model_name = 'motor_lda_model.pkl'
 csp_name = 'motor_csp.pkl'
