@@ -15,9 +15,9 @@ lsl_out = False
 width = 1536
 height = 864
 subject = 1
-session = 1
-data_gathered = False  # False = collect labeled data; True = play snake game with BCI
-n_per_class = 15  # trials per class (left hand, right foot)
+session = 4
+data_gathered = True  # False = collect labeled data; True = play snake game with BCI
+n_per_class = 20  # trials per class (left hand, right foot)
 run = 1  # Run number, it is used as the random seed for the trial sequence generation
 # Motor imagery trial timing (s)
 baseline_duration = 0.5 # seconds of baseline before recording
@@ -44,7 +44,7 @@ csp_file_path = os.path.join(model_save_dir, csp_name)
 # Class labels and labels for display
 CLASS_LEFT_HAND = 0
 CLASS_RIGHT_FOOT = 1
-INSTRUCTION_TEXT = {CLASS_LEFT_HAND: "Move LEFT HAND", CLASS_RIGHT_FOOT: "Move RIGHT FOOT"}
+INSTRUCTION_TEXT = {CLASS_LEFT_HAND: "Move LEFT HAND", CLASS_RIGHT_FOOT: "Move RIGHT HAND"}
 
 kb = keyboard.Keyboard()
 window = visual.Window(
@@ -145,44 +145,44 @@ if cyton_in:
             csp = pickle.load(f)
     else:
         csp = None
-# else:
-#     board = None
-#     stop_event = None
-#     queue_in = None
-#     model = None
-#     csp = None
-else: # fake data for debugging (uncomment to use for debugging and comment out the above)
+else:
     board = None
     stop_event = None
+    queue_in = None
     model = None
     csp = None
+# else: # fake data for debugging (uncomment to use for debugging and comment out the above)
+#     board = None
+#     stop_event = None
+#     model = None
+#     csp = None
 
-    from queue import Queue
-    queue_in = Queue()
+    # from queue import Queue
+    # queue_in = Queue()
 
-    # simulate fake EEG data in background
-    import threading
-    def fake_eeg_stream():
-        sampling_rate = 250
-        toggle = 0
+    # # simulate fake EEG data in background
+    # import threading
+    # def fake_eeg_stream():
+    #     sampling_rate = 250
+    #     toggle = 0
 
-        while True:
-            eeg = np.random.randn(8, sampling_rate // 10) * 3
+    #     while True:
+    #         eeg = np.random.randn(8, sampling_rate // 10) * 3
 
-            # Inject class-like structure
-            if toggle == 0:
-                eeg[2] += 2   # channel 3 boosted
-            else:
-                eeg[5] += 2   # channel 6 boosted
+    #         # Inject class-like structure
+    #         if toggle == 0:
+    #             eeg[2] += 2   # channel 3 boosted
+    #         else:
+    #             eeg[5] += 2   # channel 6 boosted
 
-            toggle = 1 - toggle
+    #         toggle = 1 - toggle
 
-            aux = np.random.randn(3, sampling_rate // 10)
-            timestamp = np.arange(eeg.shape[1])
-            queue_in.put((eeg, aux, timestamp))
-            time.sleep(0.1)
+    #         aux = np.random.randn(3, sampling_rate // 10)
+    #         timestamp = np.arange(eeg.shape[1])
+    #         queue_in.put((eeg, aux, timestamp))
+    #         time.sleep(0.1)
 
-    threading.Thread(target=fake_eeg_stream, daemon=True).start()
+    # threading.Thread(target=fake_eeg_stream, daemon=True).start()
 
 
 
@@ -341,8 +341,17 @@ def run_calibration():
 #     return x
 
 def _preprocess_chunk(chunk, sfreq):
-    x = chunk.copy()
+
+    x = mne.filter.filter_data(
+        chunk,
+        sfreq=sfreq,
+        l_freq=8,
+        h_freq=30,
+        verbose=False
+    )
+
     x = x - np.mean(x, axis=1, keepdims=True)
+
     return x
 
 class SnakeGame:
@@ -771,4 +780,5 @@ if __name__ == "__main__":
         run_calibration()
     else:
         run_snake_game()
+
         # run_snake_game_keyboard()
