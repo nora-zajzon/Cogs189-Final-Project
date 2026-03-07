@@ -10,7 +10,7 @@ from mne.decoding import CSP
 
 parser = argparse.ArgumentParser(description='Train motor imagery (CSP+LDA) model')
 
-folder_path = '../data/motor_imagery_2class/sub-01/ses-01/'
+folder_path = '../data/motor_imagery_2class/sub-01/ses-04/'
 model_save_dir = 'cache/'
 model_name = 'motor_lda_model.pkl'
 csp_name = 'motor_csp.pkl'
@@ -113,3 +113,4 @@ with open(os.path.join(model_save_dir, csp_name), 'wb') as f:
     pickle.dump(csp, f)
 
 print("Saved model + CSP to cache/")
+
